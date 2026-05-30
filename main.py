@@ -6,27 +6,23 @@
 ============================================================
 """
 
+import os
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.gridspec import GridSpec
 import warnings
 warnings.filterwarnings('ignore')
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-import scipy.sparse as sp
 import ast
-import re
 
 # ─────────────────────────────────────────────
 #  CONFIGURATION
 # ─────────────────────────────────────────────
-DATASET_PATH = r"/Users/banit/Desktop/CU '29/Year 1 Sem 2/mini_project_python/datasets/tmdb_5000_movies.csv"  # Place this file in the same folder
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+DATASET_PATH = os.path.join(BASE_DIR, "tmdb_5000_movies.csv")  # CSV lives next to this script
 PLOT_STYLE   = "dark_background"
 TOP_N        = 10                        # Number of recommendations to show
 
@@ -87,14 +83,18 @@ def cluster_movies(df: pd.DataFrame):
     df["text_soup"] = df["genre_str"] + " " + df["overview"].str.lower()
 
     tfidf = TfidfVectorizer(max_features=500, stop_words="english")
-    matrix = sp.csr_matrix(tfidf.fit_transform(df["text_soup"])).toarray()  
+    matrix = tfidf.fit_transform(df["text_soup"]).toarray()
 
-    # PCA → 50 dims, then KMeans
-    pca = PCA(n_components=min(50, matrix.shape[1]))
+    # PCA → up to 50 dims, bounded by #samples and #features so small
+    # catalogues don't blow up, then KMeans
+    n_components = min(50, matrix.shape[0], matrix.shape[1])
+    pca = PCA(n_components=n_components)
     reduced = pca.fit_transform(matrix)
 
-    km = KMeans(n_clusters=8, random_state=42, n_init=10)
+    km = KMeans(n_clusters=min(8, len(df)), random_state=42, n_init=10)
     df["cluster"] = km.fit_predict(reduced)
+    # Keep the first 2 PCA dims so the scatter plot reflects the real cluster space
+    df["pca_x"], df["pca_y"] = reduced[:, 0], reduced[:, 1]
 
     print("✅  Clustering complete.\n")
     return df, matrix
@@ -208,7 +208,7 @@ def plot_all(df: pd.DataFrame):
     plt.show()
 
     # --- 4d. Top 10 highest-rated movies (weighted score) ---
-    top = df[df["vote_count"] > 500].nlargest(10, "score")
+    top = df.loc[df["vote_count"] > 500].nlargest(10, "score")
     fig, ax = plt.subplots(figsize=(12, 6))
     bars = ax.barh(top["title"], top["score"], color=COLORS)
     ax.set_xlabel("Weighted Score", color="white")
@@ -223,17 +223,13 @@ def plot_all(df: pd.DataFrame):
     plt.savefig("04_top_rated.png", dpi=150, bbox_inches="tight")
     plt.show()
 
-    # --- 4e. Cluster scatter (PCA 2D) ---
+    # --- 4e. Cluster scatter (first 2 PCA dims from the actual clustering) ---
     df2 = df.dropna(subset=["cluster"]).copy()
-    tfidf2 = TfidfVectorizer(max_features=500, stop_words="english")
-    mat2 = sp.csr_matrix(tfidf2.fit_transform(df2["text_soup"])).toarray()
-    pca2   = PCA(n_components=2)
-    coords = pca2.fit_transform(mat2)
 
     fig, ax = plt.subplots(figsize=(12, 8))
     for cid in sorted(df2["cluster"].unique()):
         mask = df2["cluster"] == cid
-        ax.scatter(coords[mask, 0], coords[mask, 1],
+        ax.scatter(df2.loc[mask, "pca_x"], df2.loc[mask, "pca_y"],
                    color=COLORS[cid % len(COLORS)],
                    label=f"Cluster {cid}", alpha=0.5, s=8)
     ax.set_title("🗺️  Movie Clusters (PCA 2D)", color="white", fontsize=16)
